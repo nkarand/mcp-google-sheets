@@ -80,7 +80,7 @@ _Refer to the [ID Reference Guide](#-id-reference-guide) for more information ab
     *   ➡️ See [**Usage with Claude Desktop**](#-usage-with-claude-desktop) for examples.
 
 6.  **⚡ Optional: Enable Tool Filtering (Reduce Context Usage)**
-    *   By default, all 19 tools are enabled (~13K tokens). To reduce context usage, enable only the tools you need.
+    *   By default, all 32 tools are enabled (~13K tokens). To reduce context usage, enable only the tools you need.
     *   ➡️ See [**Tool Filtering**](#-tool-filtering-reduce-context-usage) for details.
 
 You're ready! Start issuing commands via your MCP client.
@@ -100,7 +100,7 @@ You're ready! Start issuing commands via your MCP client.
 
 ## 🎯 Tool Filtering (Reduce Context Usage)
 
-**Problem:** By default, this MCP server exposes all 19 tools, consuming ~13,000 tokens before any conversation begins. If you only need a few tools, this wastes valuable context window space.
+**Problem:** By default, this MCP server exposes all 32 tools, consuming a large number of tokens before any conversation begins. If you only need a few tools, this wastes valuable context window space.
 
 **Solution:** Use tool filtering to enable only the tools you actually use.
 
@@ -156,23 +156,36 @@ When filtering, use these exact tool names (comma-separated, no spaces):
 **All Available Tools:**
 - `add_columns`
 - `add_rows`
+- `append_table_rows`
 - `batch_update`
 - `batch_update_cells`
 - `copy_sheet`
+- `create_named_range`
 - `create_sheet`
 - `create_spreadsheet`
+- `create_table`
+- `delete_named_range`
+- `delete_table`
 - `find_in_spreadsheet`
 - `get_multiple_sheet_data`
 - `get_multiple_spreadsheet_summary`
+- `get_named_range_data`
+- `get_named_range_formulas`
 - `get_sheet_data`
 - `get_sheet_formulas`
+- `get_table_data`
+- `get_table_formulas`
 - `list_folders`
+- `list_named_ranges`
 - `list_sheets`
 - `list_spreadsheets`
+- `list_tables`
 - `rename_sheet`
 - `search_spreadsheets`
 - `share_spreadsheet`
 - `update_cells`
+- `update_named_range_data`
+- `update_table_data`
 
 **Note:** If neither `--include-tools` nor `ENABLED_TOOLS` is specified, all tools are enabled (default behavior).
 
@@ -257,6 +270,79 @@ _Refer to the [ID Reference Guide](#-id-reference-guide) for more information ab
     *   `sheet` (string): Current sheet/tab name (e.g., "Sheet1").
     *   `new_name` (string): New sheet/tab name (e.g., "Transactions").
     *   _Returns:_ Result of the operation ([`batchUpdate` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate#response-body)).
+
+### Named Range Tools
+
+Named ranges allow you to reference a range of cells by name instead of A1 notation. These tools pass the named range name directly to the Google Sheets API (no sheet prefix needed).
+
+*   **`list_named_ranges`**: List all named ranges in a spreadsheet.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   _Returns:_ List of objects with `namedRangeId`, `name`, `sheetTitle`, `a1Range`, and row/column indices.
+*   **`get_named_range_data`**: Read values from a named range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `named_range` (string): The name of the named range (e.g., `'MyNamedRange'`).
+    *   _Returns:_ Values from the named range.
+*   **`get_named_range_formulas`**: Read formulas (not computed values) from a named range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `named_range` (string): The name of the named range.
+    *   _Returns:_ Formulas from the named range.
+*   **`update_named_range_data`**: Write values to a named range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `named_range` (string): The name of the named range.
+    *   `data` (array of arrays): 2D array of values to write.
+    *   _Returns:_ Update result object.
+*   **`create_named_range`**: Create a new named range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `name` (string): Name for the new named range.
+    *   `sheet` (string): Sheet/tab name containing the range.
+    *   `start_row`, `end_row` (integer): 0-based row indices (start inclusive, end exclusive).
+    *   `start_column`, `end_column` (integer): 0-based column indices (start inclusive, end exclusive).
+    *   _Returns:_ Result including the new named range ID.
+*   **`delete_named_range`**: Delete a named range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `named_range_id` (string): The ID of the named range (from `list_named_ranges`).
+    *   _Returns:_ Result of the delete operation.
+
+### Table Tools (Native Google Sheets Tables)
+
+Native tables are created via **Format > Convert to table** in Google Sheets. They have typed columns, auto-expanding rows, and structured metadata. These tools use the Tables API added to Google Sheets in April 2025.
+
+*   **`list_tables`**: List all native tables in a spreadsheet.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   _Returns:_ List of tables with `tableId`, `name`, `sheetTitle`, `a1Range`, and `columns` (name, type).
+*   **`get_table_data`**: Read values from a native table.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `table_name` (optional string): Name of the table.
+    *   `table_id` (optional string): ID of the table (from `list_tables`). Provide either `table_name` or `table_id`.
+    *   _Returns:_ Table data including column headers and row values.
+*   **`get_table_formulas`**: Read formulas (not computed values) from a native table.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `table_name` (optional string): Name of the table.
+    *   `table_id` (optional string): ID of the table.
+    *   _Returns:_ Formulas from the table.
+*   **`update_table_data`**: Write values to a native table's range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `data` (array of arrays): 2D array of values to write.
+    *   `table_name` (optional string): Name of the table.
+    *   `table_id` (optional string): ID of the table.
+    *   _Returns:_ Update result object.
+*   **`append_table_rows`**: Append rows to a native table (table auto-expands).
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `rows` (array of arrays): 2D array of row values to append.
+    *   `table_name` (optional string): Name of the table.
+    *   `table_id` (optional string): ID of the table.
+    *   _Returns:_ Append result object.
+*   **`create_table`**: Create a new native table from a range.
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `sheet` (string): Sheet/tab name containing the range.
+    *   `start_row`, `end_row` (integer): 0-based row indices (start inclusive, end exclusive).
+    *   `start_column`, `end_column` (integer): 0-based column indices (start inclusive, end exclusive).
+    *   `name` (optional string): Name for the table.
+    *   _Returns:_ Result including the new table metadata.
+*   **`delete_table`**: Delete a native table (removes table structure, not the data).
+    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
+    *   `table_id` (string): The ID of the table (from `list_tables`).
+    *   _Returns:_ Result of the delete operation.
 
 **MCP Resources:**
 

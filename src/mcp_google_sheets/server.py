@@ -549,6 +549,691 @@ def list_sheets(spreadsheet_id: str, ctx: Context = None) -> List[str]:
     return sheet_names
 
 
+def _get_sheet_id_map(sheets_service, spreadsheet_id: str) -> Dict[int, str]:
+    """Return a mapping of sheetId -> sheet title for a spreadsheet."""
+    spreadsheet = sheets_service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields='sheets(properties(sheetId,title))'
+    ).execute()
+    return {
+        s['properties']['sheetId']: s['properties']['title']
+        for s in spreadsheet.get('sheets', [])
+    }
+
+
+def _grid_range_to_a1(grid_range: Dict[str, Any], sheet_title: str) -> str:
+    """Convert a GridRange dict to A1 notation like 'Sheet1!A1:C10'."""
+    start_col = grid_range.get('startColumnIndex', 0)
+    end_col = grid_range.get('endColumnIndex')
+    start_row = grid_range.get('startRowIndex', 0)
+    end_row = grid_range.get('endRowIndex')
+
+    start = f"{_column_index_to_letter(start_col)}{start_row + 1}"
+    if end_col is not None and end_row is not None:
+        end = f"{_column_index_to_letter(end_col - 1)}{end_row}"
+        return f"{sheet_title}!{start}:{end}"
+    return f"{sheet_title}!{start}"
+
+
+# ---------------------------------------------------------------------------
+# Named Range Tools
+# ---------------------------------------------------------------------------
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="List Named Ranges",
+        readOnlyHint=True,
+    ),
+)
+def list_named_ranges(spreadsheet_id: str,
+                      ctx: Context = None) -> List[Dict[str, Any]]:
+    """
+    List all named ranges in a Google Spreadsheet.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+
+    Returns:
+        List of named ranges with their name, ID, sheet title, and cell coordinates
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    spreadsheet = sheets_service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields='namedRanges,sheets(properties(sheetId,title))'
+    ).execute()
+
+    sheet_map = {
+        s['properties']['sheetId']: s['properties']['title']
+        for s in spreadsheet.get('sheets', [])
+    }
+
+    result = []
+    for nr in spreadsheet.get('namedRanges', []):
+        grid_range = nr.get('range', {})
+        sheet_id = grid_range.get('sheetId')
+        sheet_title = sheet_map.get(sheet_id)
+        a1 = _grid_range_to_a1(grid_range, sheet_title) if sheet_title else None
+        result.append({
+            'namedRangeId': nr.get('namedRangeId'),
+            'name': nr.get('name'),
+            'sheetId': sheet_id,
+            'sheetTitle': sheet_title,
+            'a1Range': a1,
+            'startRowIndex': grid_range.get('startRowIndex'),
+            'endRowIndex': grid_range.get('endRowIndex'),
+            'startColumnIndex': grid_range.get('startColumnIndex'),
+            'endColumnIndex': grid_range.get('endColumnIndex'),
+        })
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Get Named Range Data",
+        readOnlyHint=True,
+    ),
+)
+def get_named_range_data(spreadsheet_id: str,
+                         named_range: str,
+                         ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get data from a named range in a Google Spreadsheet.
+
+    Named ranges are passed directly to the API without a sheet prefix.
+    Use list_named_ranges to discover available named range names.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        named_range: The name of the named range (e.g., 'MyNamedRange')
+
+    Returns:
+        Values from the named range
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=named_range
+    ).execute()
+
+    return {
+        'spreadsheetId': spreadsheet_id,
+        'namedRange': named_range,
+        'range': result.get('range'),
+        'values': result.get('values', [])
+    }
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Get Named Range Formulas",
+        readOnlyHint=True,
+    ),
+)
+def get_named_range_formulas(spreadsheet_id: str,
+                             named_range: str,
+                             ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get formulas from a named range in a Google Spreadsheet.
+
+    Returns the raw formulas rather than computed values.
+    Use list_named_ranges to discover available named range names.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        named_range: The name of the named range (e.g., 'MyNamedRange')
+
+    Returns:
+        Formulas from the named range
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=named_range,
+        valueRenderOption='FORMULA'
+    ).execute()
+
+    return {
+        'spreadsheetId': spreadsheet_id,
+        'namedRange': named_range,
+        'range': result.get('range'),
+        'values': result.get('values', [])
+    }
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Update Named Range Data",
+        destructiveHint=True,
+    ),
+)
+def update_named_range_data(spreadsheet_id: str,
+                            named_range: str,
+                            data: List[List[Any]],
+                            ctx: Context = None) -> Dict[str, Any]:
+    """
+    Update cells in a named range in a Google Spreadsheet.
+
+    Use list_named_ranges to discover available named range names.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        named_range: The name of the named range (e.g., 'MyNamedRange')
+        data: 2D array of values to write
+
+    Returns:
+        Result of the update operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    result = sheets_service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=named_range,
+        valueInputOption='USER_ENTERED',
+        body={'values': data}
+    ).execute()
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Create Named Range",
+        destructiveHint=True,
+    ),
+)
+def create_named_range(spreadsheet_id: str,
+                       name: str,
+                       sheet: str,
+                       start_row: int,
+                       end_row: int,
+                       start_column: int,
+                       end_column: int,
+                       ctx: Context = None) -> Dict[str, Any]:
+    """
+    Create a new named range in a Google Spreadsheet.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        name: Name for the new named range (e.g., 'MyRange')
+        sheet: Name of the sheet/tab containing the range
+        start_row: 0-based start row index (inclusive)
+        end_row: 0-based end row index (exclusive)
+        start_column: 0-based start column index (inclusive)
+        end_column: 0-based end column index (exclusive)
+
+    Returns:
+        Result including the new named range ID
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    # Resolve sheet name to sheetId
+    sheet_map = _get_sheet_id_map(sheets_service, spreadsheet_id)
+    sheet_id = None
+    for sid, title in sheet_map.items():
+        if title == sheet:
+            sheet_id = sid
+            break
+
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}
+
+    result = sheets_service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [{
+                "addNamedRange": {
+                    "namedRange": {
+                        "name": name,
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": start_row,
+                            "endRowIndex": end_row,
+                            "startColumnIndex": start_column,
+                            "endColumnIndex": end_column,
+                        }
+                    }
+                }
+            }]
+        }
+    ).execute()
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Delete Named Range",
+        destructiveHint=True,
+    ),
+)
+def delete_named_range(spreadsheet_id: str,
+                       named_range_id: str,
+                       ctx: Context = None) -> Dict[str, Any]:
+    """
+    Delete a named range from a Google Spreadsheet.
+
+    Use list_named_ranges to find the namedRangeId.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        named_range_id: The ID of the named range to delete (from list_named_ranges)
+
+    Returns:
+        Result of the delete operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    result = sheets_service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [{
+                "deleteNamedRange": {
+                    "namedRangeId": named_range_id
+                }
+            }]
+        }
+    ).execute()
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Table Tools (Native Google Sheets Tables API, added April 2025)
+# ---------------------------------------------------------------------------
+
+
+def _get_tables(sheets_service, spreadsheet_id: str) -> List[Dict[str, Any]]:
+    """Fetch all native tables from a spreadsheet with sheet title context."""
+    spreadsheet = sheets_service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields='sheets(properties(sheetId,title),tables)'
+    ).execute()
+
+    tables = []
+    for sheet in spreadsheet.get('sheets', []):
+        sheet_title = sheet.get('properties', {}).get('title')
+        for table in sheet.get('tables', []):
+            table['_sheetTitle'] = sheet_title
+            tables.append(table)
+    return tables
+
+
+def _find_table(sheets_service, spreadsheet_id: str,
+                table_id: Optional[str] = None,
+                table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Find a specific table by ID or name. Returns the table dict or None."""
+    tables = _get_tables(sheets_service, spreadsheet_id)
+    for t in tables:
+        if table_id and t.get('tableId') == table_id:
+            return t
+        if table_name and t.get('name') == table_name:
+            return t
+    return None
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="List Tables",
+        readOnlyHint=True,
+    ),
+)
+def list_tables(spreadsheet_id: str,
+                ctx: Context = None) -> List[Dict[str, Any]]:
+    """
+    List all native tables in a Google Spreadsheet.
+
+    Native tables are created via Format > Convert to table in Google Sheets.
+    They have typed columns, auto-expanding rows, and structured metadata.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+
+    Returns:
+        List of tables with name, ID, sheet title, range, and column definitions
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+    tables = _get_tables(sheets_service, spreadsheet_id)
+
+    result = []
+    for table in tables:
+        grid_range = table.get('range', {})
+        sheet_title = table.get('_sheetTitle')
+        a1 = _grid_range_to_a1(grid_range, sheet_title) if sheet_title else None
+
+        columns = []
+        for col in table.get('columns', []):
+            columns.append({
+                'name': col.get('name'),
+                'type': col.get('columnType'),
+            })
+
+        result.append({
+            'tableId': table.get('tableId'),
+            'name': table.get('name'),
+            'sheetTitle': sheet_title,
+            'a1Range': a1,
+            'columns': columns,
+        })
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Get Table Data",
+        readOnlyHint=True,
+    ),
+)
+def get_table_data(spreadsheet_id: str,
+                   table_name: Optional[str] = None,
+                   table_id: Optional[str] = None,
+                   ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get data from a native table in a Google Spreadsheet.
+
+    Provide either table_name or table_id. Use list_tables to discover tables.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        table_name: Name of the table
+        table_id: ID of the table (from list_tables)
+
+    Returns:
+        Table data including column headers and row values
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    if not table_name and not table_id:
+        return {"error": "Must provide either 'table_name' or 'table_id'"}
+
+    table = _find_table(sheets_service, spreadsheet_id,
+                        table_id=table_id, table_name=table_name)
+    if not table:
+        return {"error": f"Table not found (name={table_name}, id={table_id})"}
+
+    grid_range = table.get('range', {})
+    sheet_title = table.get('_sheetTitle')
+    a1 = _grid_range_to_a1(grid_range, sheet_title)
+
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=a1
+    ).execute()
+
+    return {
+        'spreadsheetId': spreadsheet_id,
+        'tableId': table.get('tableId'),
+        'tableName': table.get('name'),
+        'range': a1,
+        'values': result.get('values', [])
+    }
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Get Table Formulas",
+        readOnlyHint=True,
+    ),
+)
+def get_table_formulas(spreadsheet_id: str,
+                       table_name: Optional[str] = None,
+                       table_id: Optional[str] = None,
+                       ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get formulas from a native table in a Google Spreadsheet.
+
+    Returns the raw formulas rather than computed values.
+    Provide either table_name or table_id. Use list_tables to discover tables.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        table_name: Name of the table
+        table_id: ID of the table (from list_tables)
+
+    Returns:
+        Table formulas including column headers and row formulas
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    if not table_name and not table_id:
+        return {"error": "Must provide either 'table_name' or 'table_id'"}
+
+    table = _find_table(sheets_service, spreadsheet_id,
+                        table_id=table_id, table_name=table_name)
+    if not table:
+        return {"error": f"Table not found (name={table_name}, id={table_id})"}
+
+    grid_range = table.get('range', {})
+    sheet_title = table.get('_sheetTitle')
+    a1 = _grid_range_to_a1(grid_range, sheet_title)
+
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=a1,
+        valueRenderOption='FORMULA'
+    ).execute()
+
+    return {
+        'spreadsheetId': spreadsheet_id,
+        'tableId': table.get('tableId'),
+        'tableName': table.get('name'),
+        'range': a1,
+        'values': result.get('values', [])
+    }
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Update Table Data",
+        destructiveHint=True,
+    ),
+)
+def update_table_data(spreadsheet_id: str,
+                      data: List[List[Any]],
+                      table_name: Optional[str] = None,
+                      table_id: Optional[str] = None,
+                      ctx: Context = None) -> Dict[str, Any]:
+    """
+    Update data in a native table in a Google Spreadsheet.
+
+    Writes the provided 2D array to the table's range, overwriting existing data.
+    Provide either table_name or table_id. Use list_tables to discover tables.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        data: 2D array of values to write (should match table dimensions)
+        table_name: Name of the table
+        table_id: ID of the table (from list_tables)
+
+    Returns:
+        Result of the update operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    if not table_name and not table_id:
+        return {"error": "Must provide either 'table_name' or 'table_id'"}
+
+    table = _find_table(sheets_service, spreadsheet_id,
+                        table_id=table_id, table_name=table_name)
+    if not table:
+        return {"error": f"Table not found (name={table_name}, id={table_id})"}
+
+    grid_range = table.get('range', {})
+    sheet_title = table.get('_sheetTitle')
+    a1 = _grid_range_to_a1(grid_range, sheet_title)
+
+    result = sheets_service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=a1,
+        valueInputOption='USER_ENTERED',
+        body={'values': data}
+    ).execute()
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Append Table Rows",
+        destructiveHint=True,
+    ),
+)
+def append_table_rows(spreadsheet_id: str,
+                      rows: List[List[Any]],
+                      table_name: Optional[str] = None,
+                      table_id: Optional[str] = None,
+                      ctx: Context = None) -> Dict[str, Any]:
+    """
+    Append rows to a native table in a Google Spreadsheet.
+
+    The table automatically expands to include the new rows.
+    Provide either table_name or table_id. Use list_tables to discover tables.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        rows: 2D array of row values to append
+        table_name: Name of the table
+        table_id: ID of the table (from list_tables)
+
+    Returns:
+        Result of the append operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    if not table_name and not table_id:
+        return {"error": "Must provide either 'table_name' or 'table_id'"}
+
+    table = _find_table(sheets_service, spreadsheet_id,
+                        table_id=table_id, table_name=table_name)
+    if not table:
+        return {"error": f"Table not found (name={table_name}, id={table_id})"}
+
+    grid_range = table.get('range', {})
+    sheet_title = table.get('_sheetTitle')
+    a1 = _grid_range_to_a1(grid_range, sheet_title)
+
+    result = sheets_service.spreadsheets().values().append(
+        spreadsheetId=spreadsheet_id,
+        range=a1,
+        valueInputOption='USER_ENTERED',
+        insertDataOption='INSERT_ROWS',
+        body={'values': rows}
+    ).execute()
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Create Table",
+        destructiveHint=True,
+    ),
+)
+def create_table(spreadsheet_id: str,
+                 sheet: str,
+                 start_row: int,
+                 end_row: int,
+                 start_column: int,
+                 end_column: int,
+                 name: Optional[str] = None,
+                 ctx: Context = None) -> Dict[str, Any]:
+    """
+    Create a new native table in a Google Spreadsheet.
+
+    Converts the specified range into a structured table. The first row of
+    the range is used as column headers.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        sheet: Name of the sheet/tab containing the range
+        start_row: 0-based start row index (inclusive)
+        end_row: 0-based end row index (exclusive)
+        start_column: 0-based start column index (inclusive)
+        end_column: 0-based end column index (exclusive)
+        name: Optional name for the table
+
+    Returns:
+        Result including the new table metadata
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    sheet_map = _get_sheet_id_map(sheets_service, spreadsheet_id)
+    sheet_id = None
+    for sid, title in sheet_map.items():
+        if title == sheet:
+            sheet_id = sid
+            break
+
+    if sheet_id is None:
+        return {"error": f"Sheet '{sheet}' not found"}
+
+    add_table_request = {
+        "range": {
+            "sheetId": sheet_id,
+            "startRowIndex": start_row,
+            "endRowIndex": end_row,
+            "startColumnIndex": start_column,
+            "endColumnIndex": end_column,
+        }
+    }
+    if name:
+        add_table_request["name"] = name
+
+    result = sheets_service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [{
+                "addTable": add_table_request
+            }]
+        }
+    ).execute()
+
+    return result
+
+
+@tool(
+    annotations=ToolAnnotations(
+        title="Delete Table",
+        destructiveHint=True,
+    ),
+)
+def delete_table(spreadsheet_id: str,
+                 table_id: str,
+                 ctx: Context = None) -> Dict[str, Any]:
+    """
+    Delete a native table from a Google Spreadsheet.
+
+    This removes the table structure but does not delete the underlying data.
+    Use list_tables to find the tableId.
+
+    Args:
+        spreadsheet_id: The ID of the spreadsheet (found in the URL)
+        table_id: The ID of the table to delete (from list_tables)
+
+    Returns:
+        Result of the delete operation
+    """
+    sheets_service = ctx.request_context.lifespan_context.sheets_service
+
+    result = sheets_service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [{
+                "deleteTable": {
+                    "tableId": table_id
+                }
+            }]
+        }
+    ).execute()
+
+    return result
+
+
 @tool(
     annotations=ToolAnnotations(
         title="Copy Sheet",
